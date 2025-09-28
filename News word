@@ -1,0 +1,376 @@
+<!DOCTYPE html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Word News — Private</title>
+  <style>
+    :root{
+      --maxw: 900px;
+      --card-bg: #fff;
+      --page-bg: #f4f4f9;
+      --accent: linear-gradient(90deg,#ff3b30,#ff9500,#34c759,#007aff,#5856d6);
+    }
+    *{box-sizing:border-box}
+    body{
+      margin:0;
+      font-family: "Segoe UI", Roboto, Arial, sans-serif;
+      background:var(--page-bg);
+      color:#222;
+      -webkit-font-smoothing:antialiased;
+    }
+    header{
+      background: var(--accent);
+      color:white;
+      padding:16px;
+      text-align:center;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      gap:12px;
+      flex-wrap:wrap;
+    }
+    header h1{margin:0;font-size:22px;letter-spacing:0.6px}
+    header .meta{font-size:14px; opacity:0.95}
+    main{max-width:var(--maxw); margin:20px auto; padding:0 16px 60px;}
+    .card{background:var(--card-bg); border-radius:10px; padding:16px; box-shadow:0 6px 18px rgba(25,25,25,0.06); margin-bottom:18px;}
+    input[type="text"], textarea, input[type="file"]{
+      width:100%; padding:10px; margin-top:8px; border-radius:8px; border:1px solid #d8d8d8; font-size:14px;
+    }
+    textarea{min-height:120px; resize:vertical}
+    .row{display:flex; gap:10px; align-items:center; margin-top:10px; flex-wrap:wrap}
+    button{
+      background:#2d9cdb; color:white; border:none; padding:8px 12px; border-radius:8px; cursor:pointer; font-weight:600;
+    }
+    button.ghost{background:transparent; color:#333; border:1px solid #ddd}
+    button.delete{background:#e74c3c}
+    button.like{background:#ff9500}
+    .post{margin-top:12px}
+    .media img, .media video{max-width:100%; border-radius:8px; margin-top:10px}
+    .small{font-size:13px; color:#555}
+    .controls{display:flex; gap:8px; flex-wrap:wrap; margin-top:10px}
+    .comments{margin-top:10px; padding-left:12px; border-left:3px solid #f0f0f0}
+    .notice{background:#fffbe6; padding:10px; border-radius:8px; color:#8a6d00}
+    @media (max-width:520px){
+      header h1{font-size:18px}
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <h1>🌍 Word News — Private</h1>
+    <div class="meta">Sirf aap hi post karenge — public read / like / comment allowed</div>
+    <div style="width:100%;text-align:center;margin-top:6px">
+      <button onclick="followUser()">⭐ Follow</button>
+      <span style="margin-left:10px">Followers: <strong id="followersCount">0</strong></span>
+    </div>
+  </header>
+
+  <main>
+    <div class="card">
+      <h2 style="margin:0 0 6px 0">Create a Post</h2>
+      <div class="small">Title, content and optional image/video. (Aap hi post karenge — koi login nahi)</div>
+
+      <input type="text" id="title" placeholder="Post Title">
+      <textarea id="content" placeholder="Write your news here..."></textarea>
+      <input type="file" id="media" accept="image/*,video/*">
+      <div class="row">
+        <button id="publishBtn" onclick="savePost()">Publish</button>
+        <button class="ghost" onclick="clearForm()">Clear</button>
+        <div id="uploadStatus" class="small" style="margin-left:auto"></div>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin:0 0 6px 0">All Posts</h2>
+      <div id="postsList" class="small">Loading posts...</div>
+    </div>
+  </main>
+
+  <script type="module">
+    import { createClient } from "https://esm.sh/@supabase/supabase-js";
+
+    // --------- SUPABASE CONFIG (tumhara file se liya hua) ----------
+    const SUPABASE_URL = "https://stdnepkusdzqexhmuahz.supabase.co";
+    const SUPABASE_KEY = "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InN0ZG5lcGt1c2R6cWV4aG11YWh6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTkwNDE1OTAsImV4cCI6MjA3NDYxNzU5MH0.ysXwofHVWJtiE86r6dEv1NQLp30OXVlE4KUMz3c3IsQ";
+    const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+    // ---------- Helpers ----------
+    const $ = id => document.getElementById(id);
+    function showStatus(msg, timeout=2500){
+      const el = $("uploadStatus");
+      el.innerText = msg;
+      if(timeout>0) setTimeout(()=>{ if(el.innerText===msg) el.innerText=""; }, timeout);
+    }
+
+    // Ensure profile row exists (id = 1) — single-owner assumption
+    async function ensureProfile(){
+      try{
+        const { data, error } = await supabase.from("profile").select("id,followers").eq("id",1).single();
+        if(error && error.code === "PGRST116") {
+          // table/profile not found or other (ignore here)
+          return;
+        }
+        if(!data){
+          await supabase.from("profile").insert([{ id:1, followers:0 }]);
+        }
+      } catch(e){
+        console.warn("ensureProfile:", e);
+      }
+    }
+
+    // ---------- Followers ----------
+    async function loadFollowers(){
+      try{
+        const { data, error } = await supabase.from("profile").select("followers").eq("id",1).single();
+        if(!error && data) $("followersCount").innerText = data.followers ?? 0;
+      } catch(e){
+        console.error("loadFollowers:", e);
+      }
+    }
+
+    async function followUser(){
+      try{
+        const { data, error } = await supabase.from("profile").select("followers").eq("id",1).single();
+        let newCount = 1;
+        if(!error && data) newCount = (data.followers || 0) + 1;
+        await supabase.from("profile").upsert({ id:1, followers: newCount });
+        $("followersCount").innerText = newCount;
+      } catch(e){
+        console.error("followUser:", e);
+      }
+    }
+
+    // ---------- Load Posts ----------
+    async function loadPosts(){
+      const container = $("postsList");
+      container.innerHTML = "Loading posts...";
+      try{
+        const { data, error } = await supabase
+          .from("posts")
+          .select("id,title,content,media,mediatype,likes,comments,created_at")
+          .order("id", { ascending: false });
+
+        if(error){
+          console.error("loadPosts error:", error);
+          container.innerHTML = `<div class="notice">Error loading posts. Check console.</div>`;
+          return;
+        }
+        if(!data || data.length === 0){
+          container.innerHTML = `<div class="small">Koi post nahin mila.</div>`;
+          return;
+        }
+
+        // build HTML
+        container.innerHTML = "";
+        data.forEach(p => {
+          const wrapper = document.createElement("div");
+          wrapper.className = "post";
+          wrapper.style.marginBottom = "16px";
+          let mediaHTML = "";
+          if(p.media){
+            if(p.mediatype === "image"){
+              mediaHTML = `<div class="media"><img src="${p.media}" alt="img"></div>`;
+            } else if(p.mediatype === "video"){
+              mediaHTML = `<div class="media"><video controls src="${p.media}"></video></div>`;
+            }
+          }
+          const commentsHtml = (p.comments || []).map(c => `<div>👉 ${escapeHtml(c)}</div>`).join("");
+          wrapper.innerHTML = `
+            <div style="background:#fff;padding:12px;border-radius:8px;">
+              <div style="display:flex;justify-content:space-between;align-items:center;">
+                <strong style="font-size:16px">${escapeHtml(p.title)}</strong>
+                <span class="small">${formatDate(p.created_at)}</span>
+              </div>
+              <div style="margin-top:8px">${escapeHtml(p.content)}</div>
+              ${mediaHTML}
+              <div class="controls">
+                <button class="like" onclick="likePost(${p.id})">👍 Like (${p.likes ?? 0})</button>
+                <button onclick="sharePost(${p.id})">📤 Share</button>
+                <button onclick="promptComment(${p.id})">💬 Comment</button>
+                <button class="delete" onclick="deletePost(${p.id})">🗑 Delete</button>
+              </div>
+              <div class="comments">${commentsHtml}</div>
+            </div>
+          `;
+          container.appendChild(wrapper);
+        });
+
+      } catch(e){
+        console.error(e);
+        container.innerHTML = `<div class="notice">Unexpected error while loading posts.</div>`;
+      }
+    }
+
+    // ---------- Save Post ----------
+    async function savePost(){
+      const publishBtn = $("publishBtn");
+      publishBtn.disabled = true;
+      publishBtn.innerText = "Uploading...";
+      const title = $("title").value.trim();
+      const content = $("content").value.trim();
+      const file = $("media").files[0];
+
+      if(!title || !content){
+        alert("Title aur content dono likho.");
+        publishBtn.disabled = false;
+        publishBtn.innerText = "Publish";
+        return;
+      }
+
+      try{
+        if(file){
+          // read as data URL (simple approach)
+          showStatus("Reading file...");
+          const dataUrl = await fileToDataUrl(file);
+          const mediaType = file.type.startsWith("image") ? "image" : "video";
+          const { error } = await supabase.from("posts").insert([
+            { title, content, media: dataUrl, mediatype: mediaType, likes: 0, comments: [] }
+          ]);
+          if(error) throw error;
+        } else {
+          const { error } = await supabase.from("posts").insert([
+            { title, content, likes: 0, comments: [] }
+          ]);
+          if(error) throw error;
+        }
+        showStatus("✅ Post uploaded");
+        clearForm();
+        await loadPosts();
+      } catch(err){
+        console.error("savePost error:", err);
+        alert("Post upload me error. Console dekho.");
+      } finally{
+        publishBtn.disabled = false;
+        publishBtn.innerText = "Publish";
+      }
+    }
+
+    function clearForm(){
+      $("title").value = "";
+      $("content").value = "";
+      $("media").value = "";
+      $("uploadStatus").innerText = "";
+    }
+
+    // ---------- Delete ----------
+    async function deletePost(id){
+      if(!confirm("Kya aap sach me delete karna chahte ho? Ye permanent hoga.")) return;
+      try{
+        const { error } = await supabase.from("posts").delete().eq("id", id);
+        if(error) throw error;
+        await loadPosts();
+      } catch(e){
+        console.error("deletePost:", e);
+        alert("Delete me error. Console dekho.");
+      }
+    }
+
+    // ---------- Like ----------
+    async function likePost(id){
+      try{
+        const { data, error } = await supabase.from("posts").select("likes").eq("id", id).single();
+        if(error) throw error;
+        const newLikes = (data.likes || 0) + 1;
+        const { error: err2 } = await supabase.from("posts").update({ likes: newLikes }).eq("id", id);
+        if(err2) throw err2;
+        await loadPosts();
+      } catch(e){
+        console.error("likePost:", e);
+      }
+    }
+
+    // ---------- Comment ----------
+    async function promptComment(id){
+      const comment = prompt("Apna comment likho:");
+      if(!comment) return;
+      try{
+        const { data, error } = await supabase.from("posts").select("comments").eq("id", id).single();
+        if(error) throw error;
+        const comments = data.comments || [];
+        comments.push(comment);
+        const { error: err2 } = await supabase.from("posts").update({ comments }).eq("id", id);
+        if(err2) throw err2;
+        await loadPosts();
+      } catch(e){
+        console.error("promptComment:", e);
+        alert("Comment add karne me error. Console dekho.");
+      }
+    }
+
+    // ---------- Share ----------
+    async function sharePost(id){
+      try{
+        const { data, error } = await supabase.from("posts").select("title,content").eq("id", id).single();
+        if(error) throw error;
+        const text = `${data.title}\n\n${data.content}`;
+        if(navigator.share){
+          await navigator.share({ title: data.title, text });
+        } else {
+          await navigator.clipboard.writeText(text);
+          alert("Post copied to clipboard. Paste anywhere.");
+        }
+      } catch(e){
+        console.error("sharePost:", e);
+        alert("Share failed.");
+      }
+    }
+
+    // ---------- Utilities ----------
+    function fileToDataUrl(file){
+      return new Promise((res, rej) => {
+        const reader = new FileReader();
+        reader.onload = () => res(reader.result);
+        reader.onerror = (e) => rej(e);
+        reader.readAsDataURL(file);
+      });
+    }
+
+    function escapeHtml(unsafe){
+      if(!unsafe && unsafe !== 0) return "";
+      return String(unsafe)
+        .replace(/&/g, "&amp;")
+        .replace(/</g, "&lt;")
+        .replace(/>/g, "&gt;")
+        .replace(/"/g, "&quot;")
+        .replace(/'/g, "&#039;");
+    }
+
+    function formatDate(d){
+      if(!d) return "";
+      try{
+        const dt = new Date(d);
+        return dt.toLocaleString();
+      }catch(e){ return d; }
+    }
+
+    // expose some functions to global scope for inline onclick to work
+    window.savePost = savePost;
+    window.clearForm = clearForm;
+    window.deletePost = deletePost;
+    window.likePost = likePost;
+    window.promptComment = promptComment;
+    window.sharePost = sharePost;
+    window.followUser = followUser;
+
+    // ---------- Init ----------
+    (async function init(){
+      await ensureProfile();
+      await loadFollowers();
+      await loadPosts();
+
+      // optional: realtime subscription to posts (if you want live updates)
+      // Uncomment if your project allows realtime
+      try{
+        supabase.channel('public:posts')
+          .on('postgres_changes', { event: '*', schema: 'public', table: 'posts' }, payload => {
+            // simple approach: reload posts on change
+            loadPosts();
+          }).subscribe();
+      }catch(e){
+        // ignore if realtime not permitted
+      }
+    })();
+  </script>
+</body>
+</html>
